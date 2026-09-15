@@ -1,0 +1,77 @@
+# The same stack shape as the interview project, with trivial payloads.
+# Host ports match the project and honour the same .env overrides. Ports are
+# published on 127.0.0.1 only, so nothing here is reachable from your network.
+# Every image is pinned to an exact version; bump them together with the project.
+name: interview-smoke
+
+services:
+  anvil:
+    build: ./anvil
+    entrypoint: ["anvil"]
+    command: ["--host=0.0.0.0", "--port=8545", "--chain-id=31337", "--block-time=1", "--silent"]
+    ports:
+      - "127.0.0.1:${ANVIL_PORT:-8545}:8545"
+
+  kafka:
+    image: apache/kafka:3.9.1
+    ports:
+      - "127.0.0.1:${KAFKA_PORT:-29092}:${KAFKA_PORT:-29092}"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,PLAINTEXT_HOST://:${KAFKA_PORT:-29092}
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:${KAFKA_PORT:-29092}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7.4.11-alpine
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  # One-shot: compile and test a solc 0.8.35 contract with the amd64 Foundry
+  # image (solc 0.8.35 is not published for linux/arm64, so the project runs
+  # this step under emulation on Apple Silicon). The image entrypoint is `sh -c`.
+  forge:
+    image: ghcr.io/foundry-rs/foundry:v1.5.1
+    platform: linux/amd64
+    working_dir: /work
+    volumes:
+      - ./contracts:/work
+    command: ["forge soldeer install && forge test -vv"]
+    profiles: ["oneshot"]
+
+  # One-shot: multi-stage Go build, then round trips against the three services.
+  smoke:
+    build: ./smoke
+    depends_on:
+      anvil:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      RPC_URL: http://anvil:8545
+      KAFKA_BROKER: kafka:9092
+      REDIS_ADDR: redis:6379
+    profiles: ["oneshot"]

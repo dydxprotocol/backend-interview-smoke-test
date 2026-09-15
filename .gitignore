@@ -1,0 +1,15 @@
+# Foundry artifacts written by the forge check (bind-mounted)
+contracts/out/
+contracts/cache/
+contracts/dependencies/
+
+# Local port overrides
+.env
+
+# Local builds
+smoke/smoke
+*.log
+.DS_Store
+
+# scratch
+.forge.log
